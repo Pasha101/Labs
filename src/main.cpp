@@ -16,25 +16,38 @@ static bool parse_number(const std::string& word, long& out) {
     }
 }
 
+// Лінійний пошук першого i в [lo, hi), де mem_get(mem, i) == needle; якщо промах — повертає hi
+static std::uint16_t find_byte(const Memory& mem, std::uint16_t lo, std::uint16_t hi, Byte needle) {
+    for (std::uint16_t i = lo; i < hi; ++i) {
+        if (mem_get(mem, i) == needle) {
+            return i;
+        }
+    }
+    return hi;
+}
+
 static void print_help() {
     std::cout << "commands:\n"
-              << "  dump              print all " << MEM_SIZE << " bytes\n"
-              << "  get <addr>        show one byte four ways\n"
-              << "  set <addr> <val>  write one byte (dec or 0x hex)\n"
-              << "  set16 <addr> <v>  write 16-bit word (little-endian)\n"
-              << "  regs              print cpu registers (PC A B H Z N C)\n"
-              << "  step              execute one instruction\n"
-              << "  run               execute instructions until HALT\n"
-              << "  reg <a|b|h> <v>   set register value\n"
-              << "  help              this list\n"
-              << "  quit              leave\n";
+              << "  dump                   print all " << MEM_SIZE << " bytes\n"
+              << "  get <addr>             show one byte four ways\n"
+              << "  set <addr> <val>       write one byte (dec or 0x hex)\n"
+              << "  set16 <addr> <v>       write 16-bit word (little-endian)\n"
+              << "  find <lo> <hi> <byte>  linear search in [lo, hi)\n"
+              << "  regs                   print cpu registers (PC A B H Z N C)\n"
+              << "  step                   execute one instruction\n"
+              << "  run                    execute instructions until HALT (limit 100000)\n"
+              << "  b <addr>               run until PC == addr\n"
+              << "  reg <a|b|h|pc> <v>     set register value\n"
+              << "  help                   this list\n"
+              << "  quit                   leave\n";
 }
 
 int main() {
     Memory mem;
     Cpu cpu;
+    const std::size_t MAX_STEPS = 100000;
 
-    std::cout << "ember 0.3 - Addresses, Pointers & Memory (Lab 03). Type `help`.\n";
+    std::cout << "ember 0.4 - The Shape of Control (Lab 04). Type `help`.\n";
 
     std::string line;
     while (true) {
@@ -63,19 +76,64 @@ int main() {
             step(cpu, mem);
         } else if (cmd == "run") {
             std::size_t step_count = 0;
-            const std::size_t MAX_STEPS = 100000;
-            while (!cpu.halted && step_count < MAX_STEPS) {
-                step(cpu, mem);
+            for (;;) {
+                if (cpu.halted) {
+                    break;
+                }
+                if (step_count >= MAX_STEPS) {
+                    std::cout << "\nstep limit (" << MAX_STEPS << ") reached\n";
+                    break;
+                }
+                if (!step(cpu, mem)) {
+                    break;
+                }
                 step_count++;
             }
-            if (step_count >= MAX_STEPS) {
-                std::cout << "Execution stopped: step limit exceeded.\n";
+        } else if (cmd == "b") {
+            std::string a;
+            long target = 0;
+            if (!(words >> a) || !parse_number(a, target) || target < 0 || target >= static_cast<long>(MEM_SIZE)) {
+                std::cout << "usage: b <addr>\n";
+            } else {
+                std::size_t step_count = 0;
+                std::size_t bp = static_cast<std::size_t>(target);
+                while (!cpu.halted && cpu.pc != bp && step_count < MAX_STEPS) {
+                    if (!step(cpu, mem)) {
+                        break;
+                    }
+                    step_count++;
+                }
+                if (step_count >= MAX_STEPS) {
+                    std::cout << "\nstep limit (" << MAX_STEPS << ") reached\n";
+                }
+            }
+        } else if (cmd == "find") {
+            std::string s_lo, s_hi, s_val;
+            long lo = 0, hi = 0, val = 0;
+            if (!(words >> s_lo) || !(words >> s_hi) || !(words >> s_val) ||
+                !parse_number(s_lo, lo) || !parse_number(s_hi, hi) || !parse_number(s_val, val)) {
+                std::cout << "usage: find <lo> <hi> <byte>\n";
+            } else if (lo < 0 || hi < 0 || lo > hi || hi > static_cast<long>(MEM_SIZE)) {
+                std::cout << "invalid range [lo, hi)\n";
+            } else if (val < 0 || val > 255) {
+                std::cout << "a byte is 0..255, got " << val << '\n';
+            } else {
+                std::uint16_t res = find_byte(mem,
+                                              static_cast<std::uint16_t>(lo),
+                                              static_cast<std::uint16_t>(hi),
+                                              static_cast<Byte>(val));
+                if (res == static_cast<std::uint16_t>(hi)) {
+                    std::cout << "not found\n";
+                } else {
+                    std::cout << "found at 0x" << std::hex << std::setfill('0') << std::setw(4) << res
+                              << " (" << std::dec << res << ")\n";
+                }
             }
         } else if (cmd == "reg") {
             std::string reg_name, v;
             long val = 0;
             if (!(words >> reg_name) || !(words >> v) || !parse_number(v, val)) {
-                std::cout << "usage: reg <a|b|h> <val>\n";
+                std::cout << "usage: reg <a|b|h|pc> <val>\n";
             } else {
                 if (reg_name == "a" || reg_name == "A") {
                     cpu.a = static_cast<Byte>(val & 0xFF);

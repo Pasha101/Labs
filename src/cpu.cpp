@@ -7,8 +7,8 @@
 
 void print_regs(const Cpu& cpu) {
     std::cout << "PC: " << std::hex << std::setfill('0') << std::setw(4) << cpu.pc
-              << " | A: 0x" << std::setw(2) << (int)cpu.a
-              << " | B: 0x" << std::setw(2) << (int)cpu.b
+              << " | A: 0x" << std::setw(2) << static_cast<int>(cpu.a)
+              << " | B: 0x" << std::setw(2) << static_cast<int>(cpu.b)
               << " | H: 0x" << std::setw(4) << cpu.h
               << std::dec
               << " | Z: " << cpu.flags.z
@@ -32,15 +32,24 @@ bool step(Cpu& cpu, Memory& mem) {
     Byte opcode = mem_get(mem, cpu.pc);
 
     switch (opcode) {
-        case 0x00: // NOP
-            cpu.pc += 1;
-            break;
-        case 0x01: // HALT
+        // 0x0_ — керування й вивід
+        case 0x00: // HALT
             cpu.halted = true;
             cpu.pc += 1;
             break;
+        case 0x01: // NOP
+            cpu.pc += 1;
+            break;
+        case 0x02: // OUT (символ)
+            std::cout << static_cast<char>(cpu.a);
+            cpu.pc += 1;
+            break;
+        case 0x03: // OUTN (десяткове число і пробіл)
+            std::cout << static_cast<int>(cpu.a) << ' ';
+            cpu.pc += 1;
+            break;
 
-        // ALU Operations
+        // 0x1_ — ALU
         case 0x10: // ADD A, B
             cpu.a = alu_add(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
@@ -81,65 +90,113 @@ bool step(Cpu& cpu, Memory& mem) {
             cpu.a = alu_dec(cpu.a, cpu.flags);
             cpu.pc += 1;
             break;
+        case 0x1A: // CMP A, B (рахує A - B, ставить прапорці, результат викидає)
+            (void)alu_sub(cpu.a, cpu.b, cpu.flags);
+            cpu.pc += 1;
+            break;
 
-        // Memory & Address Operations (Lab 03)
-        case 0x20: { // LOADI A, imm8
+        // 0x2_ — пересилання даних
+        case 0x20: // LOADI A, imm8
             cpu.a = mem_get(mem, cpu.pc + 1);
             cpu.pc += 2;
             break;
-        }
-        case 0x21: { // LOAD A, [addr16]
+        case 0x21: // LOADI B, imm8
+            cpu.b = mem_get(mem, cpu.pc + 1);
+            cpu.pc += 2;
+            break;
+        case 0x22: { // LOAD A, [addr16]
             std::uint16_t addr = get16(mem, cpu.pc + 1);
             cpu.a = mem_get(mem, addr);
             cpu.pc += 3;
             break;
         }
-        case 0x22: { // STORE [addr16], A
+        case 0x23: { // LOAD B, [addr16]
+            std::uint16_t addr = get16(mem, cpu.pc + 1);
+            cpu.b = mem_get(mem, addr);
+            cpu.pc += 3;
+            break;
+        }
+        case 0x24: { // STORE [addr16], A
             std::uint16_t addr = get16(mem, cpu.pc + 1);
             mem_set(mem, addr, cpu.a);
             cpu.pc += 3;
             break;
         }
-        case 0x23: { // LOADH addr16
-            cpu.h = get16(mem, cpu.pc + 1);
+        case 0x25: { // STORE [addr16], B
+            std::uint16_t addr = get16(mem, cpu.pc + 1);
+            mem_set(mem, addr, cpu.b);
             cpu.pc += 3;
             break;
         }
-        case 0x24: { // LOAD A, [H]
+        case 0x26: // MOV A, B
+            cpu.a = cpu.b;
+            cpu.pc += 1;
+            break;
+        case 0x27: // MOV B, A
+            cpu.b = cpu.a;
+            cpu.pc += 1;
+            break;
+        case 0x28: // LOADH H, imm16
+            cpu.h = get16(mem, cpu.pc + 1);
+            cpu.pc += 3;
+            break;
+        case 0x29: // LOAD A, [H]
             cpu.a = mem_get(mem, cpu.h);
             cpu.pc += 1;
             break;
-        }
-        case 0x25: { // STORE [H], A
+        case 0x2A: // STORE [H], A
             mem_set(mem, cpu.h, cpu.a);
             cpu.pc += 1;
             break;
-        }
-        case 0x26: { // INCH
-            cpu.h++;
+        case 0x2B: // INCH
+            cpu.h = static_cast<std::uint16_t>(cpu.h + 1);
             cpu.pc += 1;
             break;
-        }
-        case 0x27: { // DECH
-            cpu.h--;
+        case 0x2C: // DECH
+            cpu.h = static_cast<std::uint16_t>(cpu.h - 1);
             cpu.pc += 1;
             break;
-        }
+        case 0x2D: // HLOW (A = H & 0xFF)
+            cpu.a = static_cast<Byte>(cpu.h & 0xFF);
+            cpu.pc += 1;
+            break;
 
-        // I/O Operations (Lab 03)
-        case 0x30: { // OUT A (ASCII)
-            std::cout << static_cast<char>(cpu.a);
-            cpu.pc += 1;
+        // 0x3_ — стрибки (Lab 04)
+        case 0x30: // JMP addr16
+            cpu.pc = get16(mem, cpu.pc + 1);
             break;
-        }
-        case 0x31: { // OUTN A (Numeric)
-            std::cout << static_cast<int>(cpu.a) << "\n";
-            cpu.pc += 1;
+        case 0x31: // JZ addr16
+            if (cpu.flags.z) {
+                cpu.pc = get16(mem, cpu.pc + 1);
+            } else {
+                cpu.pc += 3;
+            }
             break;
-        }
+        case 0x32: // JNZ addr16
+            if (!cpu.flags.z) {
+                cpu.pc = get16(mem, cpu.pc + 1);
+            } else {
+                cpu.pc += 3;
+            }
+            break;
+        case 0x33: // JC addr16 (opt)
+            if (cpu.flags.c) {
+                cpu.pc = get16(mem, cpu.pc + 1);
+            } else {
+                cpu.pc += 3;
+            }
+            break;
+        case 0x34: // JNC addr16 (opt)
+            if (!cpu.flags.c) {
+                cpu.pc = get16(mem, cpu.pc + 1);
+            } else {
+                cpu.pc += 3;
+            }
+            break;
 
         default:
-            std::cout << "Unknown opcode: 0x" << std::hex << (int)opcode << std::dec << "\n";
+            std::cout << "unknown opcode 0x" << std::hex << std::setfill('0') << std::setw(2)
+                      << static_cast<int>(opcode) << std::dec << "\n";
             cpu.halted = true;
             return false;
     }
