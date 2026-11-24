@@ -15,7 +15,7 @@ bool mem_set(Memory& mem, std::size_t addr, Byte value) {
     return true;
 }
 
-// Read 16-bit word in Little-Endian format (Low byte at addr, High byte at addr + 1)
+
 std::uint16_t get16(const Memory& mem, std::size_t addr) {
     if (addr + 1 >= MEM_SIZE) {
         return 0;
@@ -25,7 +25,7 @@ std::uint16_t get16(const Memory& mem, std::size_t addr) {
     return static_cast<std::uint16_t>(low) | (static_cast<std::uint16_t>(high) << 8);
 }
 
-// Write 16-bit word in Little-Endian format
+
 bool set16(Memory& mem, std::size_t addr, std::uint16_t value) {
     if (addr + 1 >= MEM_SIZE) {
         return false;

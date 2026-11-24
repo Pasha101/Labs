@@ -9,9 +9,10 @@ struct Cpu {
     std::size_t pc{0};
     Byte a{0};
     Byte b{0};
-    std::uint16_t h{0}; // 16-bit Address Register for Lab 03
+    std::uint16_t h{0};
     Flags flags{};
     bool halted{false};
+    std::size_t ticks{0};
 };
 
 bool step(Cpu& cpu, Memory& mem);

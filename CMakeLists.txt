@@ -11,11 +11,12 @@ add_executable(ember
     src/dump.cpp
     src/alu.cpp
     src/cpu.cpp
+    src/screen.cpp
 )
 
 target_compile_options(ember PRIVATE -Wall -Wextra -Werror)
 
-# Sanitizers on Debug builds.
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT MSVC)
     target_compile_options(ember PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
     target_link_options(ember PRIVATE -fsanitize=address,undefined)

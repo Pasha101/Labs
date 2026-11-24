@@ -39,20 +39,20 @@ void dump(const Memory& mem) {
 }
 
 void show_byte(Byte b) {
-    // 1. Decimal representation
+
     std::cout << (int)b << "  ";
 
-    // 2. Hexadecimal representation (0x..)
+
     std::cout << "0x" << std::hex << std::setfill('0') << std::setw(2) << (int)b << std::dec << "  ";
 
-    // 3. Binary representation (0b........)
+  
     std::cout << "0b";
     for (int i = 7; i >= 0; --i) {
         std::cout << ((b >> i) & 1);
     }
     std::cout << "  ";
 
-    // 4. Character representation in quotes ('A' or '.')
+  
     char ch = is_printable(b) ? (char)b : '.';
     std::cout << '\'' << ch << "'\n";
 }

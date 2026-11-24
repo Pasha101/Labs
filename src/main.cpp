@@ -5,6 +5,7 @@
 #include "dump.hpp"
 #include "memory.hpp"
 #include "cpu.hpp"
+#include "screen.hpp"
 
 static bool parse_number(const std::string& word, long& out) {
     try {
@@ -16,7 +17,6 @@ static bool parse_number(const std::string& word, long& out) {
     }
 }
 
-// Лінійний пошук першого i в [lo, hi), де mem_get(mem, i) == needle; якщо промах — повертає hi
 static std::uint16_t find_byte(const Memory& mem, std::uint16_t lo, std::uint16_t hi, Byte needle) {
     for (std::uint16_t i = lo; i < hi; ++i) {
         if (mem_get(mem, i) == needle) {
@@ -26,6 +26,34 @@ static std::uint16_t find_byte(const Memory& mem, std::uint16_t lo, std::uint16_
     return hi;
 }
 
+static std::uint16_t find_nonzero(const Memory& mem, std::uint16_t lo, std::uint16_t hi) {
+    for (std::uint16_t i = lo; i < hi; ++i) {
+        if (mem_get(mem, i) != 0) {
+            return i;
+        }
+    }
+    return hi;
+}
+
+static void bubble_sort_mem(Memory& mem, std::uint16_t lo, std::uint16_t hi) {
+    if (hi <= lo + 1) {
+        return;
+    }
+    std::size_t n = static_cast<std::size_t>(hi - lo);
+    for (std::size_t pass = 0; pass < n - 1; ++pass) {
+        for (std::size_t i = 0; i < n - 1 - pass; ++i) {
+            std::size_t a_addr = static_cast<std::size_t>(lo) + i;
+            std::size_t b_addr = a_addr + 1;
+            Byte va = mem_get(mem, a_addr);
+            Byte vb = mem_get(mem, b_addr);
+            if (va > vb) {
+                mem_set(mem, a_addr, vb);
+                mem_set(mem, b_addr, va);
+            }
+        }
+    }
+}
+
 static void print_help() {
     std::cout << "commands:\n"
               << "  dump                   print all " << MEM_SIZE << " bytes\n"
@@ -33,6 +61,13 @@ static void print_help() {
               << "  set <addr> <val>       write one byte (dec or 0x hex)\n"
               << "  set16 <addr> <v>       write 16-bit word (little-endian)\n"
               << "  find <lo> <hi> <byte>  linear search in [lo, hi)\n"
+              << "  findnz <lo> <hi>       find first non-zero byte in [lo, hi)\n"
+              << "  sort <lo> <hi>         bubble sort bytes in [lo, hi)\n"
+              << "  show                   render 64x32 VRAM (0x0A00..0x0AFF)\n"
+              << "  cls                    clear 64x32 VRAM\n"
+              << "  frame                  draw border frame in VRAM\n"
+              << "  plot <x> <y>           set pixel (x, y) in VRAM\n"
+              << "  rowmin <y>             leftmost lit pixel x in row y\n"
               << "  regs                   print cpu registers (PC A B H Z N C)\n"
               << "  step                   execute one instruction\n"
               << "  run                    execute instructions until HALT (limit 100000)\n"
@@ -47,7 +82,7 @@ int main() {
     Cpu cpu;
     const std::size_t MAX_STEPS = 100000;
 
-    std::cout << "ember 0.4 - The Shape of Control (Lab 04). Type `help`.\n";
+    std::cout << "ember 0.5 - Arrays, Strings, Search & Screen (Lab 05). Type `help`.\n";
 
     std::string line;
     while (true) {
@@ -70,6 +105,41 @@ int main() {
             print_help();
         } else if (cmd == "dump") {
             dump(mem);
+        } else if (cmd == "show") {
+            show(mem);
+        } else if (cmd == "cls") {
+            clear(mem);
+        } else if (cmd == "frame") {
+            draw_frame(mem);
+        } else if (cmd == "plot") {
+            std::string sx, sy;
+            long x = 0, y = 0;
+            if (!(words >> sx) || !(words >> sy) || !parse_number(sx, x) || !parse_number(sy, y)) {
+                std::cout << "usage: plot <x> <y>\n";
+            } else if (!plot(mem, static_cast<int>(x), static_cast<int>(y))) {
+                std::cout << "pixel out of bounds (0..63, 0..31)\n";
+            }
+        } else if (cmd == "rowmin") {
+            std::string sy;
+            long y = 0;
+            if (!(words >> sy) || !parse_number(sy, y) || y < 0 || y >= SCREEN_H) {
+                std::cout << "usage: rowmin <0..31>\n";
+            } else {
+                int found_x = -1;
+                for (int x = 0; x < SCREEN_W; ++x) {
+                    std::size_t addr = VRAM_LO + static_cast<std::size_t>(y * 8 + (x / 8));
+                    Byte cell = mem_get(mem, addr);
+                    if (((cell >> (7 - (x % 8))) & 1u) != 0) {
+                        found_x = x;
+                        break;
+                    }
+                }
+                if (found_x < 0) {
+                    std::cout << "none\n";
+                } else {
+                    std::cout << found_x << "\n";
+                }
+            }
         } else if (cmd == "regs") {
             print_regs(cpu);
         } else if (cmd == "step") {
@@ -128,6 +198,38 @@ int main() {
                     std::cout << "found at 0x" << std::hex << std::setfill('0') << std::setw(4) << res
                               << " (" << std::dec << res << ")\n";
                 }
+            }
+        } else if (cmd == "findnz") {
+            std::string s_lo, s_hi;
+            long lo = 0, hi = 0;
+            if (!(words >> s_lo) || !(words >> s_hi) ||
+                !parse_number(s_lo, lo) || !parse_number(s_hi, hi)) {
+                std::cout << "usage: findnz <lo> <hi>\n";
+            } else if (lo < 0 || hi < 0 || lo > hi || hi > static_cast<long>(MEM_SIZE)) {
+                std::cout << "invalid range [lo, hi)\n";
+            } else {
+                std::uint16_t res = find_nonzero(mem,
+                                                 static_cast<std::uint16_t>(lo),
+                                                 static_cast<std::uint16_t>(hi));
+                if (res == static_cast<std::uint16_t>(hi)) {
+                    std::cout << "not found\n";
+                } else {
+                    std::cout << "found at 0x" << std::hex << std::setfill('0') << std::setw(4) << res
+                              << " (" << std::dec << res << ")\n";
+                }
+            }
+        } else if (cmd == "sort") {
+            std::string s_lo, s_hi;
+            long lo = 0, hi = 0;
+            if (!(words >> s_lo) || !(words >> s_hi) ||
+                !parse_number(s_lo, lo) || !parse_number(s_hi, hi)) {
+                std::cout << "usage: sort <lo> <hi>\n";
+            } else if (lo < 0 || hi < 0 || lo > hi || hi > static_cast<long>(MEM_SIZE)) {
+                std::cout << "invalid range [lo, hi)\n";
+            } else {
+                bubble_sort_mem(mem,
+                                static_cast<std::uint16_t>(lo),
+                                static_cast<std::uint16_t>(hi));
             }
         } else if (cmd == "reg") {
             std::string reg_name, v;
