@@ -2,7 +2,7 @@
 
 void update_zn_flags(Flags& flags, Byte result) {
     flags.z = (result == 0);
-    flags.n = ((result & 0x80) != 0); // Check bit 7
+    flags.n = ((result & 0x80) != 0);
 }
 
 Byte alu_add(Byte a, Byte b, Flags& flags) {
@@ -14,7 +14,7 @@ Byte alu_add(Byte a, Byte b, Flags& flags) {
 }
 
 Byte alu_sub(Byte a, Byte b, Flags& flags) {
-    flags.c = (a < b); // Borrow flag
+    flags.c = (a < b);
     Byte result = static_cast<Byte>(a - b);
     update_zn_flags(flags, result);
     return result;
@@ -49,14 +49,14 @@ Byte alu_not(Byte a, Flags& flags) {
 }
 
 Byte alu_shl(Byte a, Flags& flags) {
-    flags.c = ((a & 0x80) != 0); // High bit shifted out becomes carry
+    flags.c = ((a & 0x80) != 0);
     Byte result = static_cast<Byte>(a << 1);
     update_zn_flags(flags, result);
     return result;
 }
 
 Byte alu_shr(Byte a, Flags& flags) {
-    flags.c = ((a & 0x01) != 0); // Low bit shifted out becomes carry
+    flags.c = ((a & 0x01) != 0);
     Byte result = static_cast<Byte>(a >> 1);
     update_zn_flags(flags, result);
     return result;
@@ -68,4 +68,12 @@ Byte alu_inc(Byte a, Flags& flags) {
 
 Byte alu_dec(Byte a, Flags& flags) {
     return alu_sub(a, 1, flags);
+}
+
+Byte alu_mul(Byte a, Byte b, Flags& flags) {
+    uint16_t res = static_cast<uint16_t>(a) * static_cast<uint16_t>(b);
+    flags.c = (res > 0xFF);
+    Byte result = static_cast<Byte>(res & 0xFF);
+    update_zn_flags(flags, result);
+    return result;
 }

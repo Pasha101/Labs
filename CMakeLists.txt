@@ -12,10 +12,10 @@ add_executable(ember
     src/alu.cpp
     src/cpu.cpp
     src/screen.cpp
+    src/stack.cpp
 )
 
 target_compile_options(ember PRIVATE -Wall -Wextra -Werror)
-
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT MSVC)
     target_compile_options(ember PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)

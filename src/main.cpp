@@ -7,6 +7,7 @@
 #include "memory.hpp"
 #include "cpu.hpp"
 #include "screen.hpp"
+#include "stack.hpp"
 
 struct Sprite {
     std::uint8_t x{0};
@@ -103,15 +104,18 @@ static void print_layout() {
               << "  offsetof(z)  = " << offsetof(Flags, z) << "\n"
               << "  offsetof(n)  = " << offsetof(Flags, n) << "\n"
               << "  offsetof(c)  = " << offsetof(Flags, c) << "\n\n"
+              << "sizeof(Stack)  = " << sizeof(Stack)  << " bytes (alignof = " << alignof(Stack)  << ")\n"
+              << "  offsetof(sp) = " << offsetof(Stack, sp) << "\n\n"
               << "sizeof(Cpu)    = " << sizeof(Cpu)    << " bytes (alignof = " << alignof(Cpu)    << ")\n"
               << "  offsetof(pc)       = " << offsetof(Cpu, pc)       << " (8 bytes)\n"
               << "  offsetof(a)        = " << offsetof(Cpu, a)        << " (1 byte)\n"
               << "  offsetof(b)        = " << offsetof(Cpu, b)        << " (1 byte)\n"
               << "  offsetof(h)        = " << offsetof(Cpu, h)        << " (2 bytes)\n"
+              << "  offsetof(stack)    = " << offsetof(Cpu, stack)    << " (2 bytes)\n"
               << "  offsetof(flags)    = " << offsetof(Cpu, flags)    << " (3 bytes)\n"
               << "  offsetof(halted)   = " << offsetof(Cpu, halted)   << " (1 byte)\n"
               << "  offsetof(heap_ptr) = " << offsetof(Cpu, heap_ptr) << " (2 bytes)\n"
-              << "  [padding]          = 6 bytes (offsets 18..23 to align ticks to 8)\n"
+              << "  [padding]          = 4 bytes (offsets 20..23 to align ticks to 8)\n"
               << "  offsetof(ticks)    = " << offsetof(Cpu, ticks)    << " (8 bytes)\n\n"
               << "sizeof(Sprite) = " << sizeof(Sprite) << " bytes (alignof = " << alignof(Sprite) << ")\n"
               << "  offsetof(x)     = " << offsetof(Sprite, x)     << "\n"
@@ -137,12 +141,13 @@ static void print_help() {
               << "  rowmin <y>                   leftmost lit pixel x in row y\n"
               << "  sprite <i> <x> <y> <vx> <vy> configure sprite 0..7\n"
               << "  tick [n]                     advance sprites n steps (default 1) and show\n"
-              << "  layout                       print sizeof & field offsets of Cpu, Flags, Sprite\n"
+              << "  layout                       print sizeof & field offsets of structs\n"
+              << "  stack                        print SP and top stack bytes (0x0F00..0x0FFF)\n"
               << "  regs                         print cpu registers\n"
               << "  step                         execute one instruction\n"
               << "  run                          execute instructions until HALT (limit 100000)\n"
               << "  b <addr>                     run until PC == addr\n"
-              << "  reg <a|b|h|pc> <v>           set register value\n"
+              << "  reg <a|b|h|sp|pc> <v>        set register value\n"
               << "  help                         this list\n"
               << "  quit                         leave\n";
 }
@@ -153,7 +158,7 @@ int main() {
     Sprite sprites[MAX_SPRITES]{};
     const std::size_t MAX_STEPS = 100000;
 
-    std::cout << "ember 0.6 - Named Bundles: Structs, Enums & Heap (Lab 06). Type `help`.\n";
+    std::cout << "ember 0.7 - Call & Return: Functions, Stack & Recursion (Lab 07). Type `help`.\n";
 
     std::string line;
     while (true) {
@@ -176,6 +181,8 @@ int main() {
             print_help();
         } else if (cmd == "layout") {
             print_layout();
+        } else if (cmd == "stack") {
+            print_stack(cpu.stack, mem);
         } else if (cmd == "dump") {
             dump(mem);
         } else if (cmd == "show") {
@@ -344,7 +351,7 @@ int main() {
             std::string reg_name, v;
             long val = 0;
             if (!(words >> reg_name) || !(words >> v) || !parse_number(v, val)) {
-                std::cout << "usage: reg <a|b|h|pc> <val>\n";
+                std::cout << "usage: reg <a|b|h|sp|pc> <val>\n";
             } else {
                 if (reg_name == "a" || reg_name == "A") {
                     cpu.a = static_cast<Byte>(val & 0xFF);
@@ -352,6 +359,8 @@ int main() {
                     cpu.b = static_cast<Byte>(val & 0xFF);
                 } else if (reg_name == "h" || reg_name == "H") {
                     cpu.h = static_cast<std::uint16_t>(val & 0xFFFF);
+                } else if (reg_name == "sp" || reg_name == "SP") {
+                    cpu.stack.sp = static_cast<std::uint16_t>(val & 0xFFFF);
                 } else if (reg_name == "pc" || reg_name == "PC") {
                     cpu.pc = static_cast<std::size_t>(val & 0xFFFF);
                 } else {

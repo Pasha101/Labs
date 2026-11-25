@@ -12,9 +12,10 @@
 5. [Lab 04 — The Shape of Control (Branches, Loops & Scope)](#5-lab-04--the-shape-of-control-branches-loops--scope)
 6. [Lab 05 — Many of One Thing (Arrays, Strings, Search & Screen)](#6-lab-05--many-of-one-thing-arrays-strings-search--screen)
 7. [Lab 06 — Named Bundles (Structs, Enums, Heap & Sprites)](#7-lab-06--named-bundles-structs-enums-heap--sprites)
-8. [Complete Instruction Set Architecture (ISA)](#8-complete-instruction-set-architecture-isa)
-9. [Interactive Console Commands (REPL)](#9-interactive-console-commands-repl)
-10. [Build, Execution & Verification](#10-build-execution--verification)
+8. [Lab 07 — Call & Return (Functions, Stack & Recursion)](#8-lab-07--call--return-functions-stack--recursion)
+9. [Complete Instruction Set Architecture (ISA)](#9-complete-instruction-set-architecture-isa)
+10. [Interactive Console Commands (REPL)](#10-interactive-console-commands-repl)
+11. [Build, Execution & Verification](#11-build-execution--verification)
 
 ---
 
@@ -25,9 +26,10 @@
 ### CPU Registers & State
 - **`A`, `B` (8-bit):** General-purpose working registers (`0x00`–`0xFF`).
 - **`H` (16-bit):** Address register used as a guest pointer (`0x0000`–`0x0FFF`).
+- **`SP` (16-bit):** Stack Pointer inside `Stack` ADT (`0x0F00`–`0x0FFF`); empty descending stack starting at `0x0FFF`.
 - **`PC` (16-bit):** Program Counter pointing to the next instruction; starts at `0x0000`.
 - **`Flags` (`Z`, `N`, `C`):** 1-bit status flags updated by ALU operations and `CMP` (and `C` on screen bounds overflow or heap exhaustion).
-- **`HALT` (`bool`):** Execution state flag; stops `step` and `run` when `Op::Halt` (`0x00`) or an invalid instruction occurs.
+- **`HALT` (`bool`):** Execution state flag; stops `step` and `run` when `Op::Halt` (`0x00`), stack error, or an invalid instruction occurs.
 - **`heap_ptr` (16-bit):** Bump-allocator cursor starting at `HEAP_LO` (`0x0C00`), growing upward toward `HEAP_HI` (`0x0EFF`).
 - **`ticks` (`std::size_t`):** Total executed guest instructions counter (exposed modulo 256 at `0x0B01`).
 
@@ -45,15 +47,16 @@
 0xC00 ├─────────────────────────────┤
       │  HEAP     ▼ grows upward    │  768 bytes  (ALLOC cuts blocks up from 0xC00)
 0xF00 ├─────────────────────────────┤
-      │  STACK    ▲ grows downward  │  256 bytes  (SP starts at 0xFFF, Lab 07)
+      │  STACK    ▲ grows downward  │  256 bytes  (SP starts at 0xFFF, empty descending)
 0xFFF └─────────────────────────────┘
 ```
 
-### Project Structure
+### Project Translation Units (`CMakeLists.txt`)
 - `src/memory.hpp` / `src/memory.cpp`: 4KB RAM array, bounds-checked byte access (`mem_get`, `mem_set`), and Little-Endian 16-bit access (`get16`, `set16`).
 - `src/dump.hpp` / `src/dump.cpp`: 16-byte-per-row `dump()` hexdump with ASCII gutter and 4-format `show_byte()` inspector.
-- `src/alu.hpp` / `src/alu.cpp`: 8-bit Arithmetic Logic Unit and `Z`/`N`/`C` flag computation.
-- `src/cpu.hpp` / `src/cpu.cpp`: `enum class Op`, `struct Cpu`, full `switch (op)` decoder in `step()`, guest bump-allocator (`Op::Alloc`), MMIO port hooks, and register printer.
+- `src/alu.hpp` / `src/alu.cpp`: 8-bit Arithmetic Logic Unit (`ADD`, `SUB`, `MUL`, bitwise/shifts) and `Z`/`N`/`C` flag computation.
+- `src/stack.hpp` / `src/stack.cpp`: Encapsulated `Stack` ADT (`stack_push`, `stack_pop`, `stack_empty`, `stack_full`, `print_stack`) operating over `0x0F00`–`0x0FFF`.
+- `src/cpu.hpp` / `src/cpu.cpp`: `enum class Op`, `struct Cpu`, full `switch (op)` decoder in `step()`, guest bump-allocator (`Op::Alloc`), `CALL`/`RET`/`PUSH`/`POP`, and MMIO port hooks.
 - `src/screen.hpp` / `src/screen.cpp`: 64×32 monochrome framebuffer logic (`show`, `plot`, `unplot`, `clear`, `draw_frame`) operating directly on `0x0A00`–`0x0AFF`.
 - `src/main.cpp`: Interactive REPL shell, `struct Sprite` engine (`Sprite sprites[8]`), struct memory layout inspector (`layout`), and search/sort tools.
 
@@ -77,12 +80,13 @@
 ## 3. Lab 02 — Bits Don't Lie (CPU, ALU & Flags)
 
 ### ALU & Flag Semantics
-All ALU instructions (`0x10`–`0x1A`) operate on 8-bit registers `A` and `B` with modular 8-bit wrap-around:
+All ALU instructions (`0x10`–`0x1B`) operate on 8-bit registers `A` and `B` with modular 8-bit wrap-around:
 - **`Z` (Zero):** Set to `1` when the 8-bit result equals `0x00`; otherwise `0`.
 - **`N` (Negative):** Copy of bit 7 (MSB) of the result: `(result & 0x80) != 0`. Represents the sign bit in Two's Complement signed arithmetic (`-128..127`).
 - **`C` (Carry / Borrow):**
   - `ADD` (`0x10`): Computed in 16 bits (`uint16_t sum = a + b`); `C = 1` if `sum > 0xFF` (unsigned overflow).
   - `SUB` (`0x11`) / `CMP` (`0x1A`): `C = 1` if `a < b` (unsigned borrow occurred).
+  - `MUL` (`0x1B`): Computed in 16 bits (`uint16_t prod = a * b`); `C = 1` if `prod > 0xFF` (product exceeds 8 bits).
   - `SHL` (`0x16`): `C` receives the bit shifted out of bit 7.
   - `SHR` (`0x17`): `C` receives the bit shifted out of bit 0.
   - `AND`, `OR`, `XOR`, `NOT`: Always clear `C = 0`.
@@ -193,7 +197,7 @@ is_lit    = (mem[byte_addr] >> bit_index) & 1
 ## 7. Lab 06 — Named Bundles (Structs, Enums, Heap & Sprites)
 
 ### Typed Opcode Enumeration (`enum class Op : Byte`)
-Raw opcode constants were refactored into a strongly typed `enum class Op : Byte` in `src/cpu.hpp`. In `step()`, the fetched byte is converted via `Op op = static_cast<Op>(raw_op)` and decoded in `switch (op)`. Unknown opcodes still fall into `default:`, printing `unknown opcode 0x..` and halting the machine, while all Lab 05 programs preserve identical behavior.
+Raw opcode constants were refactored into a strongly typed `enum class Op : Byte` in `src/cpu.hpp`. In `step()`, the fetched byte is converted via `Op op = static_cast<Op>(raw_op)` and decoded in `switch (op)`.
 
 ### Struct Memory Layout, `sizeof` & Padding (`layout` command)
 
@@ -202,79 +206,111 @@ Inspected via `sizeof` and `offsetof` on 64-bit x86_64 (`alignof(std::size_t) ==
 | Struct | Total `sizeof` | Alignment | Field Breakdown (`offsetof` & size) | Padding Analysis |
 | :--- | :---: | :---: | :--- | :--- |
 | `Flags` | **3 bytes** | 1 byte | `z` (0, 1B), `n` (1, 1B), `c` (2, 1B) | **0 bytes padding** (all fields 1-byte aligned). |
+| `Stack` | **2 bytes** | 2 bytes | `sp` (0, 2B) | **0 bytes padding**. |
 | `Sprite` | **5 bytes** | 1 byte | `x` (0, 1B), `y` (1, 1B), `vx` (2, 1B), `vy` (3, 1B), `alive` (4, 1B) | **0 bytes padding** (`Sprite sprites[8]` occupies `8 * 5 = 40` contiguous bytes). |
-| `Cpu` | **32 bytes** | 8 bytes | `pc` (0, 8B), `a` (8, 1B), `b` (9, 1B), `h` (10, 2B), `flags` (12, 3B), `halted` (15, 1B), `heap_ptr` (16, 2B), `ticks` (24, 8B) | **6 bytes padding** at offsets `18..23` so 8-byte `ticks` is aligned to an 8-byte boundary (`24 % 8 == 0`). |
+| `Cpu` | **32 bytes** | 8 bytes | `pc` (0, 8B), `a` (8, 1B), `b` (9, 1B), `h` (10, 2B), `stack` (12, 2B), `flags` (14, 3B), `halted` (17, 1B), `heap_ptr` (18, 2B), `ticks` (24, 8B) | **4 bytes padding** at offsets `20..23` so 8-byte `ticks` is aligned to an 8-byte boundary (`24 % 8 == 0`). |
 
 ### Sprite Engine (`struct Sprite` & `Sprite sprites[8]`)
-- `struct Sprite { std::uint8_t x, y; std::int8_t vx, vy; bool alive; };` stores position, signed velocity, and active state for up to 8 sprites (`Sprite sprites[8]`).
-- `sprite <i> <x> <y> <vx> <vy>` initializes sprite `i` and plots its initial pixel.
-- `tick [n]` clears VRAM, advances all alive sprites by `(vx, vy)` with elastic reflection at the 64×32 screen boundaries (`0..63`, `0..31`), plots them, and renders the updated frame via `show()`.
+- `sprite <i> <x> <y> <vx> <vy>` initializes sprite `i` (`0..7`) and plots its initial pixel.
+- `tick [n]` clears VRAM, advances all alive sprites by `(vx, vy)` with elastic reflection at the 64×32 screen boundaries (`0..63`, `0..31`), plots them, and renders via `show()`.
 
 ### Guest Heap & Bump-Allocator (`Op::Alloc` `0x60`)
-- Region `0x0C00`–`0x0EFF` (768 bytes) is managed by `cpu.heap_ptr` (initialized to `HEAP_LO = 0x0C00`).
-- Executing `ALLOC` (`0x60`) allocates `A` bytes:
-  - If `heap_ptr + A <= 0x0F00`: sets `H = heap_ptr`, advances `heap_ptr += A`, and clears `C = 0`.
-  - If out of heap space: sets `C = 1` and leaves `H` unmodified.
-- **Two Consecutive Allocations Example:**
-  ```text
-  addr  bytes      instruction
-  0000  20 04      LOADI A, 4          ; request 4 bytes
-  0002  60         ALLOC               ; H = 0x0C00, heap_ptr = 0x0C04, C = 0
-  0003  20 08      LOADI A, 8          ; request 8 bytes
-  0005  60         ALLOC               ; H = 0x0C04, heap_ptr = 0x0C0C, C = 0
-  0006  00         HALT
-  ```
-  There is **no gap** between blocks (`0x0C00..0x0C03` followed immediately by `0x0C04..0x0C0B`) because a bump-allocator tracks only a single top pointer (`heap_ptr`) and stores no per-block headers. Consequently, it cannot `FREE` individual blocks without adding block metadata and a free list.
+- Region `0x0C00`–`0x0EFF` (768 bytes) is managed by `cpu.heap_ptr` (starts at `0x0C00`).
+- `ALLOC` (`0x60`) allocates `A` bytes into `H` and advances `heap_ptr += A` (or sets `C = 1` if out of space). Two consecutive allocations of 4 and 8 bytes produce contiguous blocks `0x0C00..0x0C03` and `0x0C04..0x0C0B` (`heap_ptr = 0x0C0C`) with no gap because a bump-allocator stores no block headers.
 
 ### Dynamic Memory Lifetime & Sanitizer Analysis (`new` / `delete`)
-
-#### Platform Toolchain Note (Windows MSYS2 UCRT64)
-Testing `scratch.cpp` with `-fsanitize=address` on Windows MSYS2 (`x86_64-w64-windows-gnu`) produced the following linker limitation because MSYS2 does not ship the Windows ASan/UBSan runtime import libraries:
-```text
-C:/msys64/ucrt64/bin/ld: cannot find C:/msys64/ucrt64/lib/clang/22/lib/x86_64-w64-windows-gnu/libclang_rt.asan_dynamic.dll.a: No such file or directory
-clang++: error: linker command failed with exit code 1
-```
-*(In WSL, `g++` was not pre-installed in the container image.)*
-
-#### Three Heap Errors, Sanitizer Diagnostics & Fixes
-
-1. **Memory Leak (`int* p = new int(42);` without `delete p;`):**
-   - **Sanitizer output (Linux LeakSanitizer):**
-     ```text
-     ERROR: LeakSanitizer: detected memory leaks
-     Direct leak of 4 byte(s) in 1 object(s) allocated from:
-         #0 in operator new(unsigned long)
-         #1 in main scratch.cpp:8
-     ```
-   - **Cause & Fix:** The 4-byte heap allocation remains alive until process exit after the local pointer `p` goes out of scope. **Fix:** Pair every `new` with `delete p;` (or manage ownership with `std::unique_ptr<int>`).
-
-2. **Use-After-Free (`delete p; std::cout << *p;`):**
-   - **Sanitizer output (AddressSanitizer):**
-     ```text
-     ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010 at pc ...
-     READ of size 4 at 0x602000000010 thread T0
-         #0 in main scratch.cpp:13
-     freed by thread T0 here:
-         #0 in operator delete(void*)
-         #1 in main scratch.cpp:12
-     ```
-   - **Cause & Fix:** `delete p` returns the memory to the allocator, turning `p` into a **dangling pointer**. Dereferencing `*p` reads poisoned/reused heap memory. **Fix:** Never access an object after `delete`, and immediately set `p = nullptr;`.
-
-3. **Double Free (`delete p; delete p;`):**
-   - **Sanitizer output (AddressSanitizer):**
-     ```text
-     ERROR: AddressSanitizer: attempting double-free on 0x602000000010 in thread T0:
-         #0 in operator delete(void*)
-         #1 in main scratch.cpp:18
-     freed by thread T0 here:
-         #0 in operator delete(void*)
-         #1 in main scratch.cpp:17
-     ```
-   - **Cause & Fix:** Calling `delete` twice on the same heap address corrupts the allocator's free-list metadata. **Fix:** Reset `p = nullptr;` after the first `delete` (`delete nullptr;` is a guaranteed no-op in C++).
+On Windows MSYS2 (`x86_64-w64-windows-gnu`), linking `-fsanitize=address` reports `cannot find libclang_rt.asan_dynamic.dll.a` because the MSYS2 GNU target does not bundle the ASan runtime DLLs. Below are the three heap lifetime errors, standard sanitizer diagnostics, and fixes:
+1. **Memory Leak (`new int(42)` without `delete`):** `ERROR: LeakSanitizer: detected memory leaks` — heap block remains allocated after pointer goes out of scope. **Fix:** pair every `new` with `delete` (or `std::unique_ptr`).
+2. **Use-After-Free (`delete p; std::cout << *p;`):** `ERROR: AddressSanitizer: heap-use-after-free` — reading through a dangling pointer after deallocation. **Fix:** set `p = nullptr;` immediately after `delete p;` and never dereference freed pointers.
+3. **Double Free (`delete p; delete p;`):** `ERROR: AddressSanitizer: attempting double-free` — freeing the same heap address twice corrupts allocator metadata. **Fix:** reset `p = nullptr;` after the first `delete` (`delete nullptr;` is a safe no-op).
 
 ---
 
-## 8. Complete Instruction Set Architecture (ISA)
+## 8. Lab 07 — Call & Return (Functions, Stack & Recursion)
+
+### Stack ADT (`src/stack.hpp` / `src/stack.cpp`)
+- **Empty Descending Stack (`0x0F00`–`0x0FFF`, 256 bytes):** `SP` starts at `0x0FFF` (pointing to the next free byte) and grows downward on `push`:
+  - `stack_push(s, mem, val)`: If `s.sp < STACK_LO` (`0x0F00`), returns `false` (overflow); otherwise writes `val` to `mem[s.sp]` and decrements `s.sp`.
+  - `stack_pop(s, mem, out)`: If `s.sp >= STACK_HI` (`0x0FFF`), returns `false` (underflow); otherwise increments `s.sp` and reads `mem[s.sp]`.
+- Any overflow or underflow halts the CPU cleanly with `stack overflow` or `stack underflow` without process crashes or wrap-around.
+
+### Calling Convention (Own Words)
+1. **Argument Passing:** The caller places the single 8-bit function argument into register **`A`** before executing `CALL`.
+2. **Return Value:** The callee leaves its 8-bit result in register **`A`** before executing `RET`.
+3. **Caller-Saved Registers (`B` and `H`):** Registers `B` and `H` are **caller-saved** (volatile across calls). A function may freely overwrite `B` and `H`; if the caller still needs their values or its own `A` after a nested `CALL`, the caller must save them on the stack (`PUSH A` / `PUSH B` / `PUSH H`) before `CALL` and restore them (`POP`) after `RET`.
+4. **Return Address Order:** `CALL addr16` pushes the **low byte** of `PC + 3` first, then the **high byte**, and jumps to `addr16`. `RET` pops the **high byte** first, then the **low byte**, and restores `PC`.
+
+### Single-Level `CALL` / `RET` Trace (`CALL printA` -> `OUT` -> `RET` -> `HALT`)
+
+```text
+addr  bytes      instruction
+0000  20 41      LOADI A, 0x41       ; A = 'A'
+0002  54 06 00   CALL printA         ; push return address 0x0005 (lo=0x05, hi=0x00), jump to 0x0006
+0005  00         HALT                ; stop after return
+0006  02         printA: OUT         ; print A ('A')
+0007  55                 RET         ; pop hi=0x00, lo=0x05 -> PC = 0x0005
+```
+
+| Step | `PC` (before) | Instruction | `SP` (after) | Stack Bytes (`[0x0FFE]`, `[0x0FFF]`) | Notes |
+| :---: | :---: | :--- | :---: | :---: | :--- |
+| 1 | `0x0000` | `LOADI A, 0x41` | `0x0FFF` | `—`, `—` | `A = 0x41` (`'A'`), stack empty |
+| 2 | `0x0002` | `CALL 0x0006` | `0x0FFD` | `0x00`, `0x05` | Pushes `0x05` at `0x0FFF`, `0x00` at `0x0FFE`; `PC = 0x0006` |
+| 3 | `0x0006` | `OUT` | `0x0FFD` | `0x00`, `0x05` | Prints `'A'`, `PC = 0x0007` |
+| 4 | `0x0007` | `RET` | `0x0FFF` | `—`, `—` | Pops `0x00` (`hi`) and `0x05` (`lo`); `PC = 0x0005` |
+| 5 | `0x0005` | `HALT` | `0x0FFF` | `—`, `—` | Execution halts cleanly |
+
+- **Why `CALL` pushes `PC + 3` instead of `PC`:** `CALL addr16` is a 3-byte instruction (`0x54` + 2-byte address). Pushing `PC` (`0x0002`) would make `RET` jump back onto the `CALL` instruction itself, causing an infinite call loop until stack overflow. Pushing `PC + 3` (`0x0005`) resumes execution at the instruction immediately following `CALL`.
+
+### Recursive Factorial `fact(5)` Listing & Call-Depth Trace
+
+```text
+addr  bytes      instruction
+0000  20 05      LOADI A, 5          ; argument n = 5
+0002  54 07 00   CALL fact           ; A = fact(5)
+0005  03         OUTN                ; prints 120
+0006  00         HALT
+0007  21 00      fact: LOADI B, 0    ; check n == 0
+0009  1A               CMP A, B
+000A  31 1B 00         JZ base
+000D  21 01            LOADI B, 1    ; check n == 1
+000F  1A               CMP A, B
+0010  31 1B 00         JZ base
+0013  50               PUSH A        ; save caller's n on stack (3 bytes/frame with return addr)
+0014  19               DEC A         ; A = n - 1
+0015  54 07 00         CALL fact     ; recursive call: A = fact(n - 1)
+0018  53               POP B         ; restore saved n into B
+0019  1B               MUL A, B      ; A = fact(n - 1) * n
+001A  55               RET
+001B  20 01      base: LOADI A, 1    ; base case returns 1
+001D  55               RET
+```
+
+#### Call/Return Depth Trace (`fact(5)` -> `120` in 60 steps, max depth = 14 bytes)
+
+| Event | Call Frame | `PC` (after) | `SP` (after) | `A` (after) | Stack Depth |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| `CALL fact` (from `main`) | `fact(5)` entered | `0x0007` | `0x0FFD` | `5` | 2 bytes (`0x0005`) |
+| `PUSH A` + `CALL fact` | `fact(4)` entered | `0x0007` | `0x0FFA` | `4` | 5 bytes (`+5`, `+0x0018`) |
+| `PUSH A` + `CALL fact` | `fact(3)` entered | `0x0007` | `0x0FF7` | `3` | 8 bytes (`+4`, `+0x0018`) |
+| `PUSH A` + `CALL fact` | `fact(2)` entered | `0x0007` | `0x0FF4` | `2` | 11 bytes (`+3`, `+0x0018`) |
+| `PUSH A` + `CALL fact` | `fact(1)` entered (base) | `0x0007` | `0x0FF1` | `1` | **14 bytes** (`+2`, `+0x0018`) |
+| `RET` (from `fact(1)`) | back in `fact(2)` | `0x0018` | `0x0FF3` | `1` | 12 bytes |
+| `POP B` + `MUL` + `RET` | back in `fact(3)` | `0x0018` | `0x0FF6` | `2` | 9 bytes (`1 * 2 = 2`) |
+| `POP B` + `MUL` + `RET` | back in `fact(4)` | `0x0018` | `0x0FF9` | `6` | 6 bytes (`2 * 3 = 6`) |
+| `POP B` + `MUL` + `RET` | back in `fact(5)` | `0x0018` | `0x0FFC` | `24` | 3 bytes (`6 * 4 = 24`) |
+| `POP B` + `MUL` + `RET` | back in `main` | `0x0005` | `0x0FFF` | `120` | 0 bytes (`24 * 5 = 120`) |
+
+### Base Cases, `fact(6)` Overflow & Intentional Stack Overflow
+- **Base Cases (`fact(0)` and `fact(1)`):** Changing byte `1` from `5` to `0` or `1` jumps immediately to `base` (`0x001B`), printing **`1 `** with `SP = 0x0FFF`.
+- **Modified Listing (`fact(6)`):** Changing byte `1` from `5` to `6` computes `6! = 720 (0x02D0)`. Because register `A` is 8-bit, the result wraps modulo 256 to `720 & 0xFF = 208 (0xD0)`, printing **`208 `** while `alu_mul` sets Carry flag **`C = 1`** to signal unsigned 8-bit overflow.
+- **Intentional Stack Overflow:** Setting `reg sp 0x0f02` before running `fact(5)` leaves only 3 bytes of stack space (`0x0F00`–`0x0F02`). On the recursive `CALL` inside `fact(5)`, `SP` drops below `STACK_LO` (`0x0F00`), and the VM halts cleanly with:
+  ```text
+  stack overflow on CALL at PC=0x0015
+  ```
+
+---
+
+## 9. Complete Instruction Set Architecture (ISA)
 
 | Opcode | Enum (`Op`) | Mnemonic | Size | Flags | Operation | Lab |
 | :---: | :--- | :--- | :---: | :---: | :--- | :---: |
@@ -294,6 +330,7 @@ clang++: error: linker command failed with exit code 1
 | `0x18` | `Op::Inc` | `INC A` | 1 | Z N | `A = A + 1` | 2 |
 | `0x19` | `Op::Dec` | `DEC A` | 1 | Z N | `A = A - 1` | 2 |
 | `0x1A` | `Op::Cmp` | `CMP A, B` | 1 | Z N C | Compute `A - B` for flags, discard result | 4 |
+| `0x1B` | `Op::Mul` | `MUL A, B` | 1 | Z N C | `A = (A * B) & 0xFF`; `C = 1` if `A * B > 255` | 7 |
 | `0x20` | `Op::LoadiA` | `LOADI A, imm8` | 2 | — | `A = imm8` | 3 |
 | `0x21` | `Op::LoadiB` | `LOADI B, imm8` | 2 | — | `B = imm8` | 3 |
 | `0x22` | `Op::LoadA` | `LOAD A, [addr16]` | 3 | — | `A = mem[addr16]` (reads `TICKS` at `0x0B01`) | 3, 5 |
@@ -317,11 +354,19 @@ clang++: error: linker command failed with exit code 1
 | `0x41` | `Op::Plot` | `PLOT` | 1 | C | Set pixel `(x=A, y=B)`; sets `C=1` if out of bounds | 5 |
 | `0x42` | `Op::Unplot` | `UNPLOT` | 1 | C | Clear pixel `(x=A, y=B)`; sets `C=1` if out of bounds | 5 |
 | `0x43` | `Op::Show` | `SHOW` | 1 | — | Render 64×32 VRAM to terminal | 5 |
+| `0x50` | `Op::PushA` | `PUSH A` | 1 | — | Push `A` onto stack (`mem[SP--] = A`) | 7 |
+| `0x51` | `Op::PushB` | `PUSH B` | 1 | — | Push `B` onto stack (`mem[SP--] = B`) | 7 |
+| `0x52` | `Op::PopA` | `POP A` | 1 | — | Pop top of stack into `A` (`A = mem[++SP]`) | 7 |
+| `0x53` | `Op::PopB` | `POP B` | 1 | — | Pop top of stack into `B` (`B = mem[++SP]`) | 7 |
+| `0x54` | `Op::Call` | `CALL addr16` | 3 | — | Push low then high byte of `PC + 3`, jump to `addr16` | 7 |
+| `0x55` | `Op::Ret` | `RET` | 1 | — | Pop high then low byte into `PC` | 7 |
+| `0x56` | `Op::PushH` | `PUSH H` | 1 | — | Push low then high byte of `H` onto stack | 7 |
+| `0x57` | `Op::PopH` | `POP H` | 1 | — | Pop high then low byte from stack into `H` | 7 |
 | `0x60` | `Op::Alloc` | `ALLOC` | 1 | C | Allocate `A` bytes in heap (`0x0C00`–`0x0EFF`) into `H`; `C=1` if full | 6 |
 
 ---
 
-## 9. Interactive Console Commands (REPL)
+## 10. Interactive Console Commands (REPL)
 
 | Command | Description |
 | :--- | :--- |
@@ -339,9 +384,10 @@ clang++: error: linker command failed with exit code 1
 | `rowmin <y>` | Print leftmost lit pixel `x` in row `y` (`0..31`) |
 | `sprite <i> <x> <y> <vx> <vy>` | Configure sprite `i` (`0..7`) at `(x, y)` with velocity `(vx, vy)` |
 | `tick [n]` | Advance all active sprites `n` steps (default `1`) with boundary bounce and render |
-| `layout` | Print `sizeof`, `alignof`, and field `offsetof` values for `Flags`, `Cpu`, and `Sprite` |
-| `regs` | Display `PC`, `A`, `B`, `H`, `HEAP`, `Z`, `N`, `C`, and `HALT` |
-| `reg <a\|b\|h\|pc> <val>` | Set register `A`, `B`, `H`, or `PC` directly |
+| `layout` | Print `sizeof`, `alignof`, and field `offsetof` values for `Flags`, `Stack`, `Cpu`, and `Sprite` |
+| `stack` | Print current `SP`, stack depth, and top bytes in `0x0F00`–`0x0FFF` |
+| `regs` | Display `PC`, `A`, `B`, `H`, `SP`, `HEAP`, `Z`, `N`, `C`, and `HALT` |
+| `reg <a\|b\|h\|sp\|pc> <val>` | Set register `A`, `B`, `H`, `SP`, or `PC` directly |
 | `step` | Execute a single instruction at `PC` |
 | `run` | Execute instructions until `HALT` or `MAX_STEPS` (`100000`) |
 | `b <addr>` | Run until `PC == addr`, `HALT`, or `MAX_STEPS` |
@@ -350,7 +396,7 @@ clang++: error: linker command failed with exit code 1
 
 ---
 
-## 10. Build, Execution & Verification
+## 11. Build, Execution & Verification
 
 ```bash
 mkdir build
@@ -360,7 +406,7 @@ cmake --build .
 ./ember.exe
 ```
 
-To verify backward compatibility with Lab 05:
+To run the automated Lab 07 verification script:
 ```powershell
-Get-Content ..\..\checks\lab-05.txt | .\ember.exe
+Get-Content ..\..\checks\lab-07.txt | .\ember.exe
 ```

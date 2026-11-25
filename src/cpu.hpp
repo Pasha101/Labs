@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "alu.hpp"
 #include "memory.hpp"
+#include "stack.hpp"
 
 constexpr std::uint16_t HEAP_LO = 0x0C00;
 constexpr std::uint16_t HEAP_HI = 0x0EFF;
@@ -26,6 +27,7 @@ enum class Op : Byte {
     Inc     = 0x18,
     Dec     = 0x19,
     Cmp     = 0x1A,
+    Mul     = 0x1B,
 
     LoadiA  = 0x20,
     LoadiB  = 0x21,
@@ -53,6 +55,15 @@ enum class Op : Byte {
     Unplot  = 0x42,
     Show    = 0x43,
 
+    PushA   = 0x50,
+    PushB   = 0x51,
+    PopA    = 0x52,
+    PopB    = 0x53,
+    Call    = 0x54,
+    Ret     = 0x55,
+    PushH   = 0x56,
+    PopH    = 0x57,
+
     Alloc   = 0x60
 };
 
@@ -61,6 +72,7 @@ struct Cpu {
     Byte a{0};
     Byte b{0};
     std::uint16_t h{0};
+    Stack stack{};
     Flags flags{};
     bool halted{false};
     std::uint16_t heap_ptr{HEAP_LO};
