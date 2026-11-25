@@ -28,6 +28,7 @@ void print_regs(const Cpu& cpu) {
               << " | A: 0x" << std::setw(2) << static_cast<int>(cpu.a)
               << " | B: 0x" << std::setw(2) << static_cast<int>(cpu.b)
               << " | H: 0x" << std::setw(4) << cpu.h
+              << " | HEAP: 0x" << std::setw(4) << cpu.heap_ptr
               << std::dec
               << " | Z: " << cpu.flags.z
               << " N: " << cpu.flags.n
@@ -47,27 +48,27 @@ bool step(Cpu& cpu, Memory& mem) {
         return false;
     }
 
-    Byte opcode = mem_get(mem, cpu.pc);
+    Byte raw_op = mem_get(mem, cpu.pc);
+    Op op = static_cast<Op>(raw_op);
     cpu.ticks++;
 
-    switch (opcode) {
-        
-        case 0x00: 
+    switch (op) {
+        case Op::Halt:
             cpu.halted = true;
             cpu.pc += 1;
             break;
-        case 0x01: 
+        case Op::Nop:
             cpu.pc += 1;
             break;
-        case 0x02: 
+        case Op::Out:
             std::cout << static_cast<char>(cpu.a);
             cpu.pc += 1;
             break;
-        case 0x03: 
+        case Op::Outn:
             std::cout << static_cast<int>(cpu.a) << ' ';
             cpu.pc += 1;
             break;
-        case 0x04: { 
+        case Op::Outs: {
             std::uint16_t addr = get16(mem, cpu.pc + 1);
             for (std::size_t i = 0; i < 256; ++i) {
                 std::size_t cur = static_cast<std::size_t>(addr) + i;
@@ -84,144 +85,141 @@ bool step(Cpu& cpu, Memory& mem) {
             break;
         }
 
-     
-        case 0x10: 
+        case Op::Add:
             cpu.a = alu_add(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x11: 
+        case Op::Sub:
             cpu.a = alu_sub(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x12: 
+        case Op::And:
             cpu.a = alu_and(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x13: 
+        case Op::Or:
             cpu.a = alu_or(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x14: 
+        case Op::Xor:
             cpu.a = alu_xor(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x15: 
+        case Op::Not:
             cpu.a = alu_not(cpu.a, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x16: 
+        case Op::Shl:
             cpu.a = alu_shl(cpu.a, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x17: 
+        case Op::Shr:
             cpu.a = alu_shr(cpu.a, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x18: 
+        case Op::Inc:
             cpu.a = alu_inc(cpu.a, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x19: 
+        case Op::Dec:
             cpu.a = alu_dec(cpu.a, cpu.flags);
             cpu.pc += 1;
             break;
-        case 0x1A: 
+        case Op::Cmp:
             (void)alu_sub(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
             break;
 
-      
-        case 0x20: 
+        case Op::LoadiA:
             cpu.a = mem_get(mem, cpu.pc + 1);
             cpu.pc += 2;
             break;
-        case 0x21: 
+        case Op::LoadiB:
             cpu.b = mem_get(mem, cpu.pc + 1);
             cpu.pc += 2;
             break;
-        case 0x22: { 
+        case Op::LoadA: {
             std::uint16_t addr = get16(mem, cpu.pc + 1);
             cpu.a = guest_read(cpu, mem, addr);
             cpu.pc += 3;
             break;
         }
-        case 0x23: { 
+        case Op::LoadB: {
             std::uint16_t addr = get16(mem, cpu.pc + 1);
             cpu.b = guest_read(cpu, mem, addr);
             cpu.pc += 3;
             break;
         }
-        case 0x24: { 
+        case Op::StoreA: {
             std::uint16_t addr = get16(mem, cpu.pc + 1);
             guest_write(mem, addr, cpu.a);
             cpu.pc += 3;
             break;
         }
-        case 0x25: { 
+        case Op::StoreB: {
             std::uint16_t addr = get16(mem, cpu.pc + 1);
             guest_write(mem, addr, cpu.b);
             cpu.pc += 3;
             break;
         }
-        case 0x26: 
+        case Op::MovAB:
             cpu.a = cpu.b;
             cpu.pc += 1;
             break;
-        case 0x27: 
+        case Op::MovBA:
             cpu.b = cpu.a;
             cpu.pc += 1;
             break;
-        case 0x28:
+        case Op::LoadH:
             cpu.h = get16(mem, cpu.pc + 1);
             cpu.pc += 3;
             break;
-        case 0x29: 
+        case Op::LoadAH:
             cpu.a = guest_read(cpu, mem, cpu.h);
             cpu.pc += 1;
             break;
-        case 0x2A: 
+        case Op::StoreHA:
             guest_write(mem, cpu.h, cpu.a);
             cpu.pc += 1;
             break;
-        case 0x2B: 
+        case Op::IncH:
             cpu.h = static_cast<std::uint16_t>(cpu.h + 1);
             cpu.pc += 1;
             break;
-        case 0x2C: 
+        case Op::DecH:
             cpu.h = static_cast<std::uint16_t>(cpu.h - 1);
             cpu.pc += 1;
             break;
-        case 0x2D: 
+        case Op::HLow:
             cpu.a = static_cast<Byte>(cpu.h & 0xFF);
             cpu.pc += 1;
             break;
 
-        
-        case 0x30: 
+        case Op::Jmp:
             cpu.pc = get16(mem, cpu.pc + 1);
             break;
-        case 0x31: 
+        case Op::Jz:
             if (cpu.flags.z) {
                 cpu.pc = get16(mem, cpu.pc + 1);
             } else {
                 cpu.pc += 3;
             }
             break;
-        case 0x32: 
+        case Op::Jnz:
             if (!cpu.flags.z) {
                 cpu.pc = get16(mem, cpu.pc + 1);
             } else {
                 cpu.pc += 3;
             }
             break;
-        case 0x33:
+        case Op::Jc:
             if (cpu.flags.c) {
                 cpu.pc = get16(mem, cpu.pc + 1);
             } else {
                 cpu.pc += 3;
             }
             break;
-        case 0x34:
+        case Op::Jnc:
             if (!cpu.flags.c) {
                 cpu.pc = get16(mem, cpu.pc + 1);
             } else {
@@ -229,28 +227,41 @@ bool step(Cpu& cpu, Memory& mem) {
             }
             break;
 
-        
-        case 0x40: 
+        case Op::Cls:
             clear(mem);
             cpu.pc += 1;
             break;
-        case 0x41: 
+        case Op::Plot:
             cpu.flags.c = !plot(mem, static_cast<int>(cpu.a), static_cast<int>(cpu.b));
             cpu.pc += 1;
             break;
-        case 0x42: 
+        case Op::Unplot:
             cpu.flags.c = !unplot(mem, static_cast<int>(cpu.a), static_cast<int>(cpu.b));
             cpu.pc += 1;
             break;
-        case 0x43: 
+        case Op::Show:
             show(mem);
             cpu.pc += 1;
             break;
 
+        case Op::Alloc: {
+            std::uint32_t size = static_cast<std::uint32_t>(cpu.a);
+            std::uint32_t limit = static_cast<std::uint32_t>(HEAP_HI) + 1u;
+            if (static_cast<std::uint32_t>(cpu.heap_ptr) + size <= limit) {
+                cpu.h = cpu.heap_ptr;
+                cpu.heap_ptr = static_cast<std::uint16_t>(cpu.heap_ptr + size);
+                cpu.flags.c = false;
+            } else {
+                cpu.flags.c = true;
+            }
+            cpu.pc += 1;
+            break;
+        }
+
         default:
             cpu.ticks--;
             std::cout << "unknown opcode 0x" << std::hex << std::setfill('0') << std::setw(2)
-                      << static_cast<int>(opcode) << std::dec << "\n";
+                      << static_cast<int>(raw_op) << std::dec << "\n";
             cpu.halted = true;
             return false;
     }

@@ -2,10 +2,21 @@
 #include <sstream>
 #include <string>
 #include <iomanip>
+#include <cstddef>
 #include "dump.hpp"
 #include "memory.hpp"
 #include "cpu.hpp"
 #include "screen.hpp"
+
+struct Sprite {
+    std::uint8_t x{0};
+    std::uint8_t y{0};
+    std::int8_t  vx{0};
+    std::int8_t  vy{0};
+    bool alive{false};
+};
+
+constexpr std::size_t MAX_SPRITES = 8;
 
 static bool parse_number(const std::string& word, long& out) {
     try {
@@ -54,35 +65,95 @@ static void bubble_sort_mem(Memory& mem, std::uint16_t lo, std::uint16_t hi) {
     }
 }
 
+static void step_sprites(Sprite sprites[MAX_SPRITES], Memory& mem) {
+    clear(mem);
+    for (std::size_t i = 0; i < MAX_SPRITES; ++i) {
+        Sprite& s = sprites[i];
+        if (!s.alive) {
+            continue;
+        }
+        int nx = static_cast<int>(s.x) + static_cast<int>(s.vx);
+        int ny = static_cast<int>(s.y) + static_cast<int>(s.vy);
+
+        if (nx < 0) {
+            nx = -nx;
+            s.vx = static_cast<std::int8_t>(-s.vx);
+        } else if (nx >= SCREEN_W) {
+            nx = 2 * (SCREEN_W - 1) - nx;
+            s.vx = static_cast<std::int8_t>(-s.vx);
+        }
+
+        if (ny < 0) {
+            ny = -ny;
+            s.vy = static_cast<std::int8_t>(-s.vy);
+        } else if (ny >= SCREEN_H) {
+            ny = 2 * (SCREEN_H - 1) - ny;
+            s.vy = static_cast<std::int8_t>(-s.vy);
+        }
+
+        s.x = static_cast<std::uint8_t>(nx);
+        s.y = static_cast<std::uint8_t>(ny);
+        plot(mem, s.x, s.y);
+    }
+}
+
+static void print_layout() {
+    std::cout << "=== Struct Memory Layout ===\n"
+              << "sizeof(Flags)  = " << sizeof(Flags)  << " bytes (alignof = " << alignof(Flags)  << ")\n"
+              << "  offsetof(z)  = " << offsetof(Flags, z) << "\n"
+              << "  offsetof(n)  = " << offsetof(Flags, n) << "\n"
+              << "  offsetof(c)  = " << offsetof(Flags, c) << "\n\n"
+              << "sizeof(Cpu)    = " << sizeof(Cpu)    << " bytes (alignof = " << alignof(Cpu)    << ")\n"
+              << "  offsetof(pc)       = " << offsetof(Cpu, pc)       << " (8 bytes)\n"
+              << "  offsetof(a)        = " << offsetof(Cpu, a)        << " (1 byte)\n"
+              << "  offsetof(b)        = " << offsetof(Cpu, b)        << " (1 byte)\n"
+              << "  offsetof(h)        = " << offsetof(Cpu, h)        << " (2 bytes)\n"
+              << "  offsetof(flags)    = " << offsetof(Cpu, flags)    << " (3 bytes)\n"
+              << "  offsetof(halted)   = " << offsetof(Cpu, halted)   << " (1 byte)\n"
+              << "  offsetof(heap_ptr) = " << offsetof(Cpu, heap_ptr) << " (2 bytes)\n"
+              << "  [padding]          = 6 bytes (offsets 18..23 to align ticks to 8)\n"
+              << "  offsetof(ticks)    = " << offsetof(Cpu, ticks)    << " (8 bytes)\n\n"
+              << "sizeof(Sprite) = " << sizeof(Sprite) << " bytes (alignof = " << alignof(Sprite) << ")\n"
+              << "  offsetof(x)     = " << offsetof(Sprite, x)     << "\n"
+              << "  offsetof(y)     = " << offsetof(Sprite, y)     << "\n"
+              << "  offsetof(vx)    = " << offsetof(Sprite, vx)    << "\n"
+              << "  offsetof(vy)    = " << offsetof(Sprite, vy)    << "\n"
+              << "  offsetof(alive) = " << offsetof(Sprite, alive) << "\n";
+}
+
 static void print_help() {
     std::cout << "commands:\n"
-              << "  dump                   print all " << MEM_SIZE << " bytes\n"
-              << "  get <addr>             show one byte four ways\n"
-              << "  set <addr> <val>       write one byte (dec or 0x hex)\n"
-              << "  set16 <addr> <v>       write 16-bit word (little-endian)\n"
-              << "  find <lo> <hi> <byte>  linear search in [lo, hi)\n"
-              << "  findnz <lo> <hi>       find first non-zero byte in [lo, hi)\n"
-              << "  sort <lo> <hi>         bubble sort bytes in [lo, hi)\n"
-              << "  show                   render 64x32 VRAM (0x0A00..0x0AFF)\n"
-              << "  cls                    clear 64x32 VRAM\n"
-              << "  frame                  draw border frame in VRAM\n"
-              << "  plot <x> <y>           set pixel (x, y) in VRAM\n"
-              << "  rowmin <y>             leftmost lit pixel x in row y\n"
-              << "  regs                   print cpu registers (PC A B H Z N C)\n"
-              << "  step                   execute one instruction\n"
-              << "  run                    execute instructions until HALT (limit 100000)\n"
-              << "  b <addr>               run until PC == addr\n"
-              << "  reg <a|b|h|pc> <v>     set register value\n"
-              << "  help                   this list\n"
-              << "  quit                   leave\n";
+              << "  dump                         print all " << MEM_SIZE << " bytes\n"
+              << "  get <addr>                   show one byte four ways\n"
+              << "  set <addr> <val>             write one byte (dec or 0x hex)\n"
+              << "  set16 <addr> <v>             write 16-bit word (little-endian)\n"
+              << "  find <lo> <hi> <byte>        linear search in [lo, hi)\n"
+              << "  findnz <lo> <hi>             find first non-zero byte in [lo, hi)\n"
+              << "  sort <lo> <hi>               bubble sort bytes in [lo, hi)\n"
+              << "  show                         render 64x32 VRAM (0x0A00..0x0AFF)\n"
+              << "  cls                          clear 64x32 VRAM\n"
+              << "  frame                        draw border frame in VRAM\n"
+              << "  plot <x> <y>                 set pixel (x, y) in VRAM\n"
+              << "  rowmin <y>                   leftmost lit pixel x in row y\n"
+              << "  sprite <i> <x> <y> <vx> <vy> configure sprite 0..7\n"
+              << "  tick [n]                     advance sprites n steps (default 1) and show\n"
+              << "  layout                       print sizeof & field offsets of Cpu, Flags, Sprite\n"
+              << "  regs                         print cpu registers\n"
+              << "  step                         execute one instruction\n"
+              << "  run                          execute instructions until HALT (limit 100000)\n"
+              << "  b <addr>                     run until PC == addr\n"
+              << "  reg <a|b|h|pc> <v>           set register value\n"
+              << "  help                         this list\n"
+              << "  quit                         leave\n";
 }
 
 int main() {
     Memory mem;
     Cpu cpu;
+    Sprite sprites[MAX_SPRITES]{};
     const std::size_t MAX_STEPS = 100000;
 
-    std::cout << "ember 0.5 - Arrays, Strings, Search & Screen (Lab 05). Type `help`.\n";
+    std::cout << "ember 0.6 - Named Bundles: Structs, Enums & Heap (Lab 06). Type `help`.\n";
 
     std::string line;
     while (true) {
@@ -103,6 +174,8 @@ int main() {
             break;
         } else if (cmd == "help") {
             print_help();
+        } else if (cmd == "layout") {
+            print_layout();
         } else if (cmd == "dump") {
             dump(mem);
         } else if (cmd == "show") {
@@ -119,6 +192,42 @@ int main() {
             } else if (!plot(mem, static_cast<int>(x), static_cast<int>(y))) {
                 std::cout << "pixel out of bounds (0..63, 0..31)\n";
             }
+        } else if (cmd == "sprite") {
+            std::string si, sx, sy, svx, svy;
+            long idx = 0, x = 0, y = 0, vx = 0, vy = 0;
+            if (!(words >> si) || !(words >> sx) || !(words >> sy) || !(words >> svx) || !(words >> svy) ||
+                !parse_number(si, idx) || !parse_number(sx, x) || !parse_number(sy, y) ||
+                !parse_number(svx, vx) || !parse_number(svy, vy)) {
+                std::cout << "usage: sprite <i> <x> <y> <vx> <vy>\n";
+            } else if (idx < 0 || idx >= static_cast<long>(MAX_SPRITES)) {
+                std::cout << "sprite index must be 0..7\n";
+            } else if (x < 0 || x >= SCREEN_W || y < 0 || y >= SCREEN_H) {
+                std::cout << "sprite position out of bounds (0..63, 0..31)\n";
+            } else if (vx < -32 || vx > 32 || vy < -16 || vy > 16) {
+                std::cout << "velocity out of reasonable range\n";
+            } else {
+                sprites[idx] = Sprite{
+                    static_cast<std::uint8_t>(x),
+                    static_cast<std::uint8_t>(y),
+                    static_cast<std::int8_t>(vx),
+                    static_cast<std::int8_t>(vy),
+                    true
+                };
+                plot(mem, static_cast<int>(x), static_cast<int>(y));
+            }
+        } else if (cmd == "tick") {
+            std::string sn;
+            long count = 1;
+            if (words >> sn) {
+                if (!parse_number(sn, count) || count < 1 || count > 1000) {
+                    std::cout << "usage: tick [1..1000]\n";
+                    continue;
+                }
+            }
+            for (long step_i = 0; step_i < count; ++step_i) {
+                step_sprites(sprites, mem);
+            }
+            show(mem);
         } else if (cmd == "rowmin") {
             std::string sy;
             long y = 0;
