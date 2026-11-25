@@ -2,6 +2,7 @@
 #include "memory.hpp"
 #include "alu.hpp"
 #include "screen.hpp"
+#include "stack.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -28,6 +29,7 @@ void print_regs(const Cpu& cpu) {
               << " | A: 0x" << std::setw(2) << static_cast<int>(cpu.a)
               << " | B: 0x" << std::setw(2) << static_cast<int>(cpu.b)
               << " | H: 0x" << std::setw(4) << cpu.h
+              << " | SP: 0x" << std::setw(4) << cpu.stack.sp
               << " | HEAP: 0x" << std::setw(4) << cpu.heap_ptr
               << std::dec
               << " | Z: " << cpu.flags.z
@@ -127,6 +129,10 @@ bool step(Cpu& cpu, Memory& mem) {
             break;
         case Op::Cmp:
             (void)alu_sub(cpu.a, cpu.b, cpu.flags);
+            cpu.pc += 1;
+            break;
+        case Op::Mul:
+            cpu.a = alu_mul(cpu.a, cpu.b, cpu.flags);
             cpu.pc += 1;
             break;
 
@@ -243,6 +249,86 @@ bool step(Cpu& cpu, Memory& mem) {
             show(mem);
             cpu.pc += 1;
             break;
+
+        case Op::PushA:
+            if (!stack_push(cpu.stack, mem, cpu.a)) {
+                std::cout << "\nstack overflow at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.pc += 1;
+            break;
+        case Op::PushB:
+            if (!stack_push(cpu.stack, mem, cpu.b)) {
+                std::cout << "\nstack overflow at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.pc += 1;
+            break;
+        case Op::PopA:
+            if (!stack_pop(cpu.stack, mem, cpu.a)) {
+                std::cout << "\nstack underflow at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.pc += 1;
+            break;
+        case Op::PopB:
+            if (!stack_pop(cpu.stack, mem, cpu.b)) {
+                std::cout << "\nstack underflow at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.pc += 1;
+            break;
+        case Op::Call: {
+            std::uint16_t target = get16(mem, cpu.pc + 1);
+            std::uint16_t ret_addr = static_cast<std::uint16_t>(cpu.pc + 3);
+            Byte lo = static_cast<Byte>(ret_addr & 0xFF);
+            Byte hi = static_cast<Byte>((ret_addr >> 8) & 0xFF);
+            if (!stack_push(cpu.stack, mem, lo) || !stack_push(cpu.stack, mem, hi)) {
+                std::cout << "\nstack overflow on CALL at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.pc = target;
+            break;
+        }
+        case Op::Ret: {
+            Byte hi = 0;
+            Byte lo = 0;
+            if (!stack_pop(cpu.stack, mem, hi) || !stack_pop(cpu.stack, mem, lo)) {
+                std::cout << "\nstack underflow on RET at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.pc = (static_cast<std::uint16_t>(hi) << 8) | static_cast<std::uint16_t>(lo);
+            break;
+        }
+        case Op::PushH: {
+            Byte lo = static_cast<Byte>(cpu.h & 0xFF);
+            Byte hi = static_cast<Byte>((cpu.h >> 8) & 0xFF);
+            if (!stack_push(cpu.stack, mem, lo) || !stack_push(cpu.stack, mem, hi)) {
+                std::cout << "\nstack overflow at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.pc += 1;
+            break;
+        }
+        case Op::PopH: {
+            Byte hi = 0;
+            Byte lo = 0;
+            if (!stack_pop(cpu.stack, mem, hi) || !stack_pop(cpu.stack, mem, lo)) {
+                std::cout << "\nstack underflow at PC=0x" << std::hex << std::setfill('0') << std::setw(4) << cpu.pc << std::dec << "\n";
+                cpu.halted = true;
+                return false;
+            }
+            cpu.h = (static_cast<std::uint16_t>(hi) << 8) | static_cast<std::uint16_t>(lo);
+            cpu.pc += 1;
+            break;
+        }
 
         case Op::Alloc: {
             std::uint32_t size = static_cast<std::uint32_t>(cpu.a);

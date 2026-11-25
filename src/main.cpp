@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <iomanip>
@@ -8,6 +9,9 @@
 #include "cpu.hpp"
 #include "screen.hpp"
 #include "stack.hpp"
+#include "asm/token.hpp"
+#include "asm/lexer.hpp"
+#include "asm/assembler.hpp"
 
 struct Sprite {
     std::uint8_t x{0};
@@ -18,6 +22,20 @@ struct Sprite {
 };
 
 constexpr std::size_t MAX_SPRITES = 8;
+
+static bool read_asm_file(const std::string& path, std::string& out_src) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) {
+        f.open("../" + path, std::ios::binary);
+    }
+    if (!f.is_open()) {
+        return false;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    out_src = ss.str();
+    return true;
+}
 
 static bool parse_number(const std::string& word, long& out) {
     try {
@@ -127,6 +145,9 @@ static void print_layout() {
 
 static void print_help() {
     std::cout << "commands:\n"
+              << "  lex <file.asm>               tokenize assembly file and print tokens\n"
+              << "  asm <file.asm>               assemble file into 0x0000 and reset CPU\n"
+              << "  disasm <lo> <hi>             disassemble bytes in [lo, hi)\n"
               << "  dump                         print all " << MEM_SIZE << " bytes\n"
               << "  get <addr>                   show one byte four ways\n"
               << "  set <addr> <val>             write one byte (dec or 0x hex)\n"
@@ -152,13 +173,40 @@ static void print_help() {
               << "  quit                         leave\n";
 }
 
-int main() {
+int main(int argc, char** argv) {
     Memory mem;
     Cpu cpu;
     Sprite sprites[MAX_SPRITES]{};
     const std::size_t MAX_STEPS = 100000;
 
-    std::cout << "ember 0.7 - Call & Return: Functions, Stack & Recursion (Lab 07). Type `help`.\n";
+    if (argc > 1) {
+        std::string path = argv[1];
+        std::string src;
+        if (!read_asm_file(path, src)) {
+            std::cerr << "cannot open file: " << path << "\n";
+            return 1;
+        }
+        AsmResult res = assemble_source(src, mem, 0x0000);
+        if (!res.ok) {
+            std::cerr << res.error << "\n";
+            return 1;
+        }
+        std::size_t step_count = 0;
+        while (!cpu.halted) {
+            if (step_count >= MAX_STEPS) {
+                std::cerr << "\nstep limit (" << MAX_STEPS << ") reached\n";
+                return 1;
+            }
+            if (!step(cpu, mem)) {
+                break;
+            }
+            step_count++;
+        }
+        std::cout << "\n";
+        return 0;
+    }
+
+    std::cout << "ember 1.0.0 - Lexer, Two-Pass Assembler & 4KB VM. Type `help`.\n";
 
     std::string line;
     while (true) {
@@ -179,6 +227,61 @@ int main() {
             break;
         } else if (cmd == "help") {
             print_help();
+        } else if (cmd == "lex") {
+            std::string path;
+            if (!(words >> path)) {
+                std::cout << "usage: lex <file.asm>\n";
+                continue;
+            }
+            std::string src;
+            if (!read_asm_file(path, src)) {
+                std::cout << "cannot open file: " << path << "\n";
+                continue;
+            }
+            std::string err;
+            Token* head = lex(src, err);
+            if (!head) {
+                std::cout << err << "\n";
+                continue;
+            }
+            for (Token* t = head; t; t = t->next) {
+                std::cout << "line " << t->line << ": " << token_kind_name(t->kind)
+                          << " (" << t->text << ")\n";
+            }
+            destroy(head);
+        } else if (cmd == "asm") {
+            std::string path;
+            if (!(words >> path)) {
+                std::cout << "usage: asm <file.asm>\n";
+                continue;
+            }
+            std::string src;
+            if (!read_asm_file(path, src)) {
+                std::cout << "cannot open file: " << path << "\n";
+                continue;
+            }
+            AsmResult res = assemble_source(src, mem, 0x0000);
+            if (!res.ok) {
+                std::cout << res.error << "\n";
+                continue;
+            }
+            cpu = Cpu{};
+            std::cout << "assembled " << res.bytes_written << " bytes:";
+            for (std::size_t i = 0; i < res.bytes_written; ++i) {
+                std::cout << " " << std::hex << std::setfill('0') << std::setw(2)
+                          << static_cast<int>(mem_get(mem, i));
+            }
+            std::cout << std::dec << "\n";
+        } else if (cmd == "disasm") {
+            std::string s_lo, s_hi;
+            long lo = 0, hi = 0;
+            if (!(words >> s_lo) || !(words >> s_hi) || !parse_number(s_lo, lo) || !parse_number(s_hi, hi)) {
+                std::cout << "usage: disasm <lo> <hi>\n";
+            } else if (lo < 0 || hi < 0 || lo > hi || hi > static_cast<long>(MEM_SIZE)) {
+                std::cout << "invalid range [lo, hi)\n";
+            } else {
+                disassemble_range(mem, static_cast<std::uint16_t>(lo), static_cast<std::uint16_t>(hi));
+            }
         } else if (cmd == "layout") {
             print_layout();
         } else if (cmd == "stack") {
